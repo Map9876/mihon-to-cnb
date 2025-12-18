@@ -38,7 +38,7 @@ jobs:
         git remote add target https://cnb.cool/kfc50/keiyoushi-extensions.git
         
         # 设置认证URL（使用token）
-        git remote set-url origin https://${{ secrets.SYNC_TOKEN }}@cnb.cool/kfc50/keiyoushi-extensions/
+        git remote set-url origin https://${{ secrets.SYNC_TOKEN }}@cnb.cool/kfc50/keiyoushi-extensions
         
         # 推送所有分支和标签到目标仓库
         git push origin --all --force
