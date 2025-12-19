@@ -18,83 +18,149 @@ jobs:
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         
-    - name: Setup Git
+    - name: Setup Git and Network
       run: |
-        echo "🔧 配置 Git 用户信息..."
+        echo "🔧 配置 Git 和网络优化..."
         git config --global user.name 'GitHub Actions'
         git config --global user.email 'actions@github.com'
-        echo "✅ Git 配置完成"
+        
+        # 网络优化配置
+        git config --global http.version HTTP/1.1
+        git config --global http.postBuffer 1000000000  # 1GB缓冲区
+        git config --global http.lowSpeedLimit 1000
+        git config --global http.lowSpeedTime 300
+        git config --global core.compression 9
+        git config --global core.deltaBaseCacheLimit 2g
+        
+        echo "🌐 网络诊断信息..."
+        curl -I --max-time 10 https://cnb.cool 2>&1 | head -10
+        echo "网络延迟测试:"
+        ping -c 3 cnb.cool 2>&1 | tail -5
         
     - name: Clone extensions repository
       run: |
         echo "🗑️ 清理旧目录..."
         rm -rf extensions
         
-        echo "📥 开始克隆 extensions 仓库的 repo 分支..."
-        echo "仓库地址: https://github.com/keiyoushi/extensions.git"
-        echo "目标分支: repo"
+        echo "📥 开始克隆（使用深度克隆减少数据量）..."
+        echo "建议：对于2.2GB的大仓库，使用深度克隆"
+        echo "选项1：完整克隆（时间长但完整）"
+        echo "选项2：深度克隆（时间短但历史有限）"
         
-        git clone --branch repo --single-branch --progress https://github.com/keiyoushi/extensions.git 2>&1 | while read line; do
-          echo "📦 $line"
+        # 完整克隆版本
+        echo "🔄 开始完整克隆..."
+        time git clone --branch repo --single-branch --progress https://github.com/keiyoushi/extensions.git 2>&1 | \
+        while read line; do
+          echo "📦 $(date '+%H:%M:%S') $line"
         done
         
         echo "✅ 克隆完成"
+        cd extensions
+        echo "仓库大小: $(du -sh .)"
+        echo "提交数量: $(git rev-list --count HEAD)"
+        cd ..
         
-    - name: Push to target repository
-      timeout-minutes: 10  # 设置10分钟超时，防止无限等待
+    - name: Push to target repository (带详细诊断)
+      timeout-minutes: 30
       run: |
-        echo "🚀 开始推送步骤"
+        echo "🚀 =========== 开始推送阶段 ==========="
         cd extensions
         
-        echo "=== 步骤 1: 验证当前状态 ==="
-        echo "当前目录: $(pwd)"
-        echo "当前分支: $(git branch --show-current)"
+        echo "📊 当前仓库状态:"
+        echo "目录: $(pwd)"
+        echo "分支: $(git branch --show-current)"
         echo "最近提交: $(git log --oneline -1)"
+        echo "对象数量: $(git count-objects -v | grep count | cut -d: -f2)"
         
-        echo "=== 步骤 2: 配置远程仓库 ==="
-        # 先删除可能存在的旧远程
-        git remote remove target 2>/dev/null || echo "无旧远程需要删除"
+        echo "🔗 配置远程仓库..."
+        # 清理旧远程
+        git remote remove target 2>/dev/null || echo "无旧远程"
         
-        # 添加新的远程仓库（使用带认证的URL）
-        echo "添加远程: cnb.cool/kfc50/keiyoushi-extensions.git"
-        git remote add target https://cnb:${{ secrets.SYNC_TOKEN }}@cnb.cool/kfc50/keiyoushi-extensions.git
+        # 添加新远程（带认证）
+        REMOTE_URL="https://cnb:${{ secrets.SYNC_TOKEN }}@cnb.cool/kfc50/keiyoushi-extensions.git"
+        echo "远程URL: ${REMOTE_URL/\/\/cnb:*/\/\/cnb:******@cnb.cool/}"
+        git remote add target "$REMOTE_URL"
         
-        echo "远程列表:"
-        git remote -v
+        echo "🔍 测试远程连接..."
+        echo "测试1: 基本连接测试"
+        timeout 15 git ls-remote target --heads 2>&1 && echo "✅ 连接正常" || echo "⚠️ 连接测试失败"
         
-        echo "=== 步骤 3: 测试网络连接 ==="
-        echo "测试仓库可访问性..."
-        timeout 30 git ls-remote target --heads 2>&1 && echo "✅ 仓库可访问" || echo "⚠️ 仓库访问测试失败"
+        echo "测试2: 认证测试"
+        curl -u "cnb:${{ secrets.SYNC_TOKEN }}" \
+             -I --max-time 10 \
+             "https://cnb.cool/kfc50/keiyoushi-extensions.git/info/refs?service=git-receive-pack" 2>&1 | \
+             grep -E "(HTTP|WWW-Auth|Server)" && echo "✅ 认证正常" || echo "⚠️ 认证可能有问题"
         
-        echo "=== 步骤 4: 开始推送 ==="
-        echo "推送命令: git push target repo --force --progress"
+        echo "⚙️ 设置环境变量进行详细追踪..."
+        export GIT_CURL_VERBOSE=1
+        export GIT_TRACE=1
+        export GIT_TRACE_PACKET=1
+        export GIT_TRACE_PERFORMANCE=1
+        export GIT_TRACE_SETUP=1
+        export GIT_HTTP_MAX_REQUEST_BUFFER=500M
+        
+        echo "📤 =========== 开始推送 ==========="
         echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "推送命令: git push target repo --force --progress"
+        echo "----------------------------------------"
         
-        # 使用详细模式推送并实时输出
-        GIT_TRACE=1 GIT_CURL_VERBOSE=1 GIT_TRACE_PERFORMANCE=1 git push target repo --force --progress 2>&1 | while read line; do
+        # 使用tee同时输出到控制台和文件
+        {
+          echo "推送详细日志开始..."
+          time git push target repo --force --progress 2>&1
+          PUSH_EXIT_CODE=$?
+          echo "推送退出码: $PUSH_EXIT_CODE"
+        } | tee /tmp/git_push.log | \
+        grep -E "(Send|Recv|Writing|Counting|Compressing|Total|done|error|fatal|Enumerating|POST|PUT|GET|HTTP)" | \
+        while read line; do
           echo "📤 $(date '+%H:%M:%S') $line"
         done
         
-        PUSH_EXIT_CODE=${PIPESTATUS[0]}
-        
-        echo "=== 步骤 5: 验证结果 ==="
+        echo "----------------------------------------"
         echo "结束时间: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "推送退出码: $PUSH_EXIT_CODE"
+        
+        # 分析推送结果
+        echo "📋 =========== 结果分析 ==========="
         
         if [ $PUSH_EXIT_CODE -eq 0 ]; then
           echo "✅ 推送成功！"
           echo "验证远程分支..."
-          git ls-remote target refs/heads/repo 2>&1 && echo "✅ 远程分支确认存在" || echo "⚠️ 远程分支验证失败"
+          if git ls-remote target refs/heads/repo 2>&1 | grep -q "refs/heads/repo"; then
+            echo "✅ 远程分支确认存在"
+            echo "分支SHA: $(git ls-remote target refs/heads/repo | cut -f1)"
+          else
+            echo "⚠️ 远程分支验证失败"
+          fi
         else
           echo "❌ 推送失败，退出码: $PUSH_EXIT_CODE"
-          echo "=== 调试信息 ==="
-          echo "1. 检查网络:"
-          curl -I --max-time 10 https://cnb.cool 2>&1 | head -5
-          echo "2. 检查目录:"
-          ls -la
-          echo "3. Git 状态:"
-          git status --short
-          exit 1
+          
+          echo "🔍 错误分析:"
+          echo "1. 检查网络连接..."
+          curl -I --max-time 10 "https://cnb.cool" 2>&1 | head -5
+          
+          echo "2. 检查最近日志（最后20行）:"
+          tail -20 /tmp/git_push.log
+          
+          echo "3. 检查错误关键词:"
+          grep -i -E "(error|fail|timeout|denied|forbidden|unauthorized|not found)" /tmp/git_push.log | head -10
+          
+          echo "💡 建议操作:"
+          echo "1. 检查 CNB 令牌是否过期"
+          echo "2. 检查仓库路径是否正确: kfc50/keiyoushi-extensions"
+          echo "3. 尝试分批推送（如果仓库太大）"
+          
+          # 保存详细日志供后续分析
+          echo "📁 详细日志保存到: /tmp/git_push.log"
+          echo "日志前100行:"
+          head -100 /tmp/git_push.log
         fi
         
-        echo "🎉 同步流程完成！"
+        echo "🎉 推送流程执行完毕"
+        exit $PUSH_EXIT_CODE
+        
+    - name: 推送后清理（可选）
+      if: always()
+      run: |
+        echo "🧹 清理临时文件..."
+        rm -rf extensions
+        echo "✅ 清理完成"
