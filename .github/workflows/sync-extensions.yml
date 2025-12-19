@@ -34,14 +34,12 @@ jobs:
       run: |
         cd extensions
         
-        # 添加目标远程仓库
-        git remote add target https://cnb.cool/kfc50/keiyoushi-extensions.git
-        
-        # 设置认证URL（使用token）
-        git remote set-url origin https://${{ secrets.SYNC_TOKEN }}@cnb.cool/kfc50/keiyoushi-extensions
+        # 添加目标远程仓库（使用正确的认证格式）
+        # 格式：https://用户名:访问令牌@仓库地址
+        git remote add target https://cnb:${{ secrets.SYNC_TOKEN }}@cnb.cool/kfc50/keiyoushi-extensions.git
         
         # 推送所有分支和标签到目标仓库
-        git push origin --all --force
-        git push origin --tags --force
+        git push target --all --force
+        git push target --tags --force
         
         echo "同步完成！"
